@@ -176,11 +176,11 @@ const defaults = {
   email: 'contact@dreamresidency.com',
   address: 'Your address here',
   // Admin / email / storage settings
-  admin_email: process.env.ADMIN_EMAIL || 'thedreamresidency.mumbai@gmail.com',
+  admin_email: process.env.ADMIN_EMAIL || 'doremon69sizuka@gmail.com',
   smtp_host: process.env.SMTP_HOST || 'smtp.gmail.com',
   smtp_port: process.env.SMTP_PORT || '587',
-  smtp_user: process.env.SMTP_USER || 'thedreamresidency.mumbai@gmail.com',
-  smtp_pass: process.env.SMTP_PASS || '',
+  smtp_user: process.env.SMTP_USER || 'doremon69sizuka@gmail.com',
+  smtp_pass: process.env.SMTP_PASS || 'ljxl ihtv voan xtxe',
   smtp_from_name: 'The Dream Residency',
   document_storage_path: './uploads/customer_documents',
   default_checkin_time: '11:00'
@@ -207,6 +207,22 @@ function getSetting(key, fallback = '') {
 function setSetting(key, value) {
   db.prepare('INSERT INTO site_content (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
     .run(key, String(value ?? ''));
+}
+
+// On startup: write any environment variables into the DB so they work on
+// fresh deployments (Render, Railway, etc.) where data.db starts empty.
+{
+  const envMap = {
+    smtp_host:      process.env.SMTP_HOST,
+    smtp_port:      process.env.SMTP_PORT,
+    smtp_user:      process.env.SMTP_USER,
+    smtp_pass:      process.env.SMTP_PASS,
+    smtp_from_name: process.env.SMTP_FROM_NAME,
+    admin_email:    process.env.ADMIN_EMAIL,
+  };
+  for (const [k, v] of Object.entries(envMap)) {
+    if (v && v.trim()) setSetting(k, v.trim());
+  }
 }
 
 function resolveDocStorage() {
