@@ -141,7 +141,8 @@ function showGuestsModal(guests, title) {
 // ---------- Confirm Request Modal ----------
 async function openConfirmModal(reqRow) {
   const types = await api('/api/room-types');
-  const rt = types.find(t => t.slug === reqRow.room_type || t.category === reqRow.room_type) || types[0];
+  const rtVal = (reqRow.room_type || '').toLowerCase().trim();
+  const rt = types.find(t => t.slug === rtVal || t.name.toLowerCase() === rtVal) || types[0];
   const rtPrice = rt ? rt.price : 0;
   const nights = Math.max(1, Math.round((new Date(reqRow.check_out) - new Date(reqRow.check_in))/86400000));
   const estimatedTotal = nights * rtPrice * (reqRow.rooms_required || 1);

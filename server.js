@@ -1,5 +1,6 @@
 const express = require('express');
 const session = require('express-session');
+const SqliteStore = require('better-sqlite3-session-store')(session);
 const Database = require('better-sqlite3');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
@@ -146,21 +147,21 @@ addColumnIfMissing('bookings', 'room_number', 'TEXT');
 addColumnIfMissing('bookings', 'notes', 'TEXT');
 addColumnIfMissing('booking_requests', 'address', 'TEXT');
 
-// Set default prices for room types that have no price set yet
+// Seed room types (only if table is empty) — prices included in seed
+const rtCount = db.prepare('SELECT COUNT(*) AS c FROM room_types').get().c;
+if (rtCount === 0) {
+  const seed = db.prepare(`INSERT INTO room_types (slug, name, image, short_desc, description, features, price, display_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  seed.run('suite',  'Suite',    'img/room-suite.jpg',       'Spacious luxury suite with living area',          'Our Suite offers an expansive layout with a separate living area, premium furnishings, and panoramic views. Perfect for extended stays, special celebrations, and discerning guests who appreciate fine detail.',    'King-size Bed, Separate Living Area, Smart TV, Mini Bar, City View, Premium Toiletries, 24x7 Room Service',    8000, 1);
+  seed.run('deluxe', 'Deluxe',   'img/room-deluxe.jpg',      'Elegant deluxe room with modern comfort',          'The Deluxe room blends modern comfort with timeless elegance. Spacious enough to relax, refined enough to remember — ideal for couples or business travellers.',                                                   'Queen-size Bed, Work Desk, Smart TV, Tea/Coffee Maker, Air Conditioning, Premium Linens, Free Wi-Fi, Daily Housekeeping', 5000, 2);
+  seed.run('twin',   'Twin Bed', 'img/twin-enhanced.png',    'Twin bed room ideal for friends or family',        'The Twin Bed room features two well-appointed single beds, perfect for friends, colleagues, or families travelling together. Bright, airy, and thoughtfully designed.',                                          'Two Single Beds, Smart TV, Tea/Coffee Maker, Air Conditioning, Free Wi-Fi, Wardrobe, Daily Housekeeping',      3500, 3);
+}
+
+// Ensure prices are always set (covers existing DBs with price = 0)
 db.exec(`
   UPDATE room_types SET price = 8000 WHERE slug = 'suite'  AND (price IS NULL OR price = 0);
   UPDATE room_types SET price = 5000 WHERE slug = 'deluxe' AND (price IS NULL OR price = 0);
   UPDATE room_types SET price = 3500 WHERE slug = 'twin'   AND (price IS NULL OR price = 0);
 `);
-
-// Seed room types (only if table is empty)
-const rtCount = db.prepare('SELECT COUNT(*) AS c FROM room_types').get().c;
-if (rtCount === 0) {
-  const seed = db.prepare(`INSERT INTO room_types (slug, name, image, short_desc, description, features, display_order) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-  seed.run('suite', 'Suite', 'img/room-suite.jpg', 'Spacious luxury suite with living area', 'Our Suite offers an expansive layout with a separate living area, premium furnishings, and panoramic views. Perfect for extended stays, special celebrations, and discerning guests who appreciate fine detail.', 'King-size Bed, Separate Living Area, Smart TV, Mini Bar, City View, Premium Toiletries, 24x7 Room Service', 1);
-  seed.run('deluxe', 'Deluxe', 'img/room-deluxe.jpg', 'Elegant deluxe room with modern comfort', 'The Deluxe room blends modern comfort with timeless elegance. Spacious enough to relax, refined enough to remember — ideal for couples or business travellers.', 'Queen-size Bed, Work Desk, Smart TV, Tea/Coffee Maker, Air Conditioning, Premium Linens, Free Wi-Fi, Daily Housekeeping', 2);
-  seed.run('twin', 'Twin Bed', 'img/twin-enhanced.png', 'Twin bed room ideal for friends or family', 'The Twin Bed room features two well-appointed single beds, perfect for friends, colleagues, or families travelling together. Bright, airy, and thoughtfully designed.', 'Two Single Beds, Smart TV, Tea/Coffee Maker, Air Conditioning, Free Wi-Fi, Wardrobe, Daily Housekeeping', 3);
-}
 
 const defaults = {
   hotel_name: 'The Dream Residency',
@@ -340,6 +341,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(require('cookie-parser')());
 app.use(session({
+  store: new SqliteStore({ client: db, expired: { clear: true, intervalMs: 900000 } }),
   secret: process.env.SESSION_SECRET || 'dream-residency-stable-secret-2024',
   resave: false,
   saveUninitialized: false,
@@ -453,10 +455,11 @@ function rtToPublic(rt) {
   };
 }
 function findRoomType(idOrSlug) {
-  const numeric = /^\d+$/.test(String(idOrSlug));
-  return numeric
-    ? db.prepare('SELECT * FROM room_types WHERE id=?').get(idOrSlug)
-    : db.prepare('SELECT * FROM room_types WHERE slug=?').get(String(idOrSlug).toLowerCase());
+  if (!idOrSlug) return null;
+  const s = String(idOrSlug).toLowerCase().trim();
+  if (/^\d+$/.test(s)) return db.prepare('SELECT * FROM room_types WHERE id=?').get(Number(s));
+  // Match by slug first, then by name (case-insensitive) — handles "Twin Bed", "twin", "SUITE" etc.
+  return db.prepare('SELECT * FROM room_types WHERE slug=? OR LOWER(name)=? LIMIT 1').get(s, s);
 }
 app.get('/api/room-types', (_, res) => {
   const rows = db.prepare('SELECT * FROM room_types ORDER BY display_order, id').all();
@@ -1022,16 +1025,16 @@ app.post('/api/booking-requests/:id/confirm', requireAdmin, async (req, res) => 
   if (!room_number || !String(room_number).trim()) return res.status(400).json({ error: 'Room number is required' });
 
   const roomNum = String(room_number).trim();
-  const roomTypeSlag = (reqRow.room_type || 'suite').toLowerCase();
-  const rt = findRoomType(roomTypeSlag) || db.prepare('SELECT * FROM room_types ORDER BY id LIMIT 1').get();
+  const rt = findRoomType(reqRow.room_type) || db.prepare('SELECT * FROM room_types ORDER BY id LIMIT 1').get();
+  const rtSlug  = rt ? rt.slug  : 'suite';
   const rtPrice = rt ? (rt.price || 0) : 0;
-  const rtName = rt ? rt.name : (reqRow.room_type || 'Room');
+  const rtName  = rt ? rt.name  : (reqRow.room_type || 'Room');
 
   // Find or create a room record matching the number + type
   let room = db.prepare('SELECT * FROM rooms WHERE number=?').get(roomNum);
   if (!room) {
     const rr = db.prepare('INSERT INTO rooms (number, category, price, status) VALUES (?, ?, ?, ?)')
-      .run(roomNum, roomTypeSlag, rtPrice, 'booked');
+      .run(roomNum, rtSlug, rtPrice, 'booked');
     room = db.prepare('SELECT * FROM rooms WHERE id=?').get(rr.lastInsertRowid);
   } else {
     db.prepare("UPDATE rooms SET status='booked' WHERE id=?").run(room.id);
