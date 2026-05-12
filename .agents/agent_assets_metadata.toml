@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "BpCcxOu7l9sORcyMPbCrb"
+uri = "file://dream-residency-updated.zip"
+type = "unspecified"
+title = "Dream Residency — Updated Project (ZIP)"
